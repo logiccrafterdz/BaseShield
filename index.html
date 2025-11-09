@@ -1,0 +1,1365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BaseShield - Automatic Protection for Base</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.0/dist/ethers.umd.min.js"></script>
+    
+    <!-- WalletConnect v2 (lazy loaded) -->
+    <script>
+        // Browser polyfills for WalletConnect
+        if (typeof global === 'undefined') {
+            window.global = window;
+        }
+        if (typeof process === 'undefined') {
+            window.process = { env: {} };
+        }
+
+        // Prefer local vendored WalletConnect to avoid ORB blocking; fallback to CDNs
+        window.loadWalletConnect = async function() {
+            // If already present, return immediately
+            if (window.WalletConnectEthereumProvider) {
+                return window.WalletConnectEthereumProvider;
+            }
+
+            // Try local vendored script first (same-origin => no ORB)
+            let loadedFrom = null;
+            try {
+                await new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.src = './vendor/walletconnect-ethereum-provider.umd.min.js';
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    document.head.appendChild(script);
+                });
+                loadedFrom = 'local';
+            } catch (localErr) {
+                console.warn('Local WalletConnect script not found, falling back to CDN.', localErr);
+                // Fallback to CDNs as last resort
+                const cdnUrls = [
+                    'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.0/dist/index.umd.min.js',
+                    'https://unpkg.com/@walletconnect/ethereum-provider@2.11.0/dist/index.umd.min.js'
+                ];
+                let loaded = false;
+                for (const url of cdnUrls) {
+                    try {
+                        await new Promise((resolve, reject) => {
+                            const script = document.createElement('script');
+                            script.src = url;
+                            script.onload = resolve;
+                            script.onerror = reject;
+                            document.head.appendChild(script);
+                        });
+                        loaded = true;
+                        loadedFrom = url;
+                        break;
+                    } catch (e) {
+                        console.warn('Failed to load WalletConnect from', url, e);
+                    }
+                }
+                if (!loaded) {
+                    throw new Error('All WalletConnect CDN sources failed to load');
+                }
+            }
+
+            // Detect UMD global and map to a consistent name
+            const wcGlobal = window['@walletconnect/ethereum-provider'];
+            if (wcGlobal && wcGlobal.EthereumProvider) {
+                window.WalletConnectEthereumProvider = wcGlobal.EthereumProvider;
+            } else if (window.WalletConnect?.EthereumProvider) {
+                window.WalletConnectEthereumProvider = window.WalletConnect.EthereumProvider;
+            } else if (window.WalletConnectProvider?.EthereumProvider) {
+                window.WalletConnectEthereumProvider = window.WalletConnectProvider.EthereumProvider;
+            }
+
+            if (!window.WalletConnectEthereumProvider) {
+                const source = loadedFrom ? ` (source: ${loadedFrom})` : '';
+                throw new Error('WalletConnect EthereumProvider not found after loading' + source);
+            }
+            return window.WalletConnectEthereumProvider;
+        };
+
+        // Resolve WalletConnect projectId from multiple sources for local dev
+        async function resolveWalletConnectProjectId() {
+            // 1) Global override
+            if (typeof window.WALLETCONNECT_PROJECT_ID === 'string' && window.WALLETCONNECT_PROJECT_ID.trim()) {
+                return window.WALLETCONNECT_PROJECT_ID.trim();
+            }
+
+            // 2) Query params (wc_pid or walletconnect_project_id)
+            const params = new URLSearchParams(window.location.search);
+            const qp = params.get('wc_pid') || params.get('walletconnect_project_id');
+            if (qp && qp.trim()) {
+                try { localStorage.setItem('WALLETCONNECT_PROJECT_ID', qp.trim()); } catch {}
+                return qp.trim();
+            }
+
+            // 3) Local storage
+            try {
+                const ls = localStorage.getItem('WALLETCONNECT_PROJECT_ID');
+                if (ls && ls.trim()) return ls.trim();
+            } catch {}
+
+            // 4) .env file (only for local dev; avoid in production)
+            try {
+                const isLocal = ['localhost', '127.0.0.1'].includes(location.hostname);
+                if (isLocal) {
+                    const resp = await fetch('./.env');
+                    if (resp.ok) {
+                        const text = await resp.text();
+                        const match = text.match(/WALLETCONNECT_PROJECT_ID\s*=\s*([^\n#]+)/);
+                        if (match && match[1]) {
+                            const fromEnv = match[1].trim();
+                            if (fromEnv) {
+                                try { localStorage.setItem('WALLETCONNECT_PROJECT_ID', fromEnv); } catch {}
+                                return fromEnv;
+                            }
+                        }
+                    }
+                }
+            } catch {}
+
+            return null;
+        }
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Space Grotesk', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+            font-weight: 400;
+            -webkit-font-smoothing: antialiased;
+            letter-spacing: -0.01em;
+            background: radial-gradient(circle at 50% 20%, #111320 0%, #0a0a0f 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            color: #e0e0ffcc;
+        }
+
+        #card {
+            transition: all 0.5s ease;
+            border-radius: 12px;
+            background: #111320;
+            padding: 24px;
+            max-width: 400px;
+            width: 100%;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .shield {
+            font-size: 64px;
+            transition: all 0.5s ease;
+            display: block;
+            margin: 0 auto 16px;
+            filter: drop-shadow(0 0 12px rgba(47, 128, 237, 0.13));
+            will-change: filter, text-shadow;
+        }
+
+        /* Neon glow styled to echo Base identity */
+        .shield-neon {
+            text-shadow:
+                0 0 6px rgba(47, 128, 237, 0.50),
+                0 0 12px rgba(47, 128, 237, 0.35),
+                0 0 22px rgba(47, 128, 237, 0.20);
+            filter: drop-shadow(0 0 20px rgba(47, 128, 237, 0.18));
+        }
+
+        .shield-idle { color: #666; }
+        .shield-connected { color: #2F80ED; }
+        .shield-protected { color: #4ade80; }
+        .shield-countdown { color: #fbbf24; }
+        .shield-resolved { color: #888; }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.8; }
+        }
+
+        .shield-pulse {
+            animation: pulse 4s ease-in-out infinite;
+        }
+
+        h1 {
+            color: white;
+            font-weight: 500;
+            font-size: 24px;
+            margin-bottom: 8px;
+            opacity: 0;
+            transition: all 0.5s ease;
+        }
+
+        .tagline {
+            font-size: 15px;
+            line-height: 1.5;
+            color: #e0e0ffcc;
+            margin-bottom: 24px;
+            opacity: 0;
+            transition: all 0.5s ease;
+        }
+
+        /* Tooltip for "automatic compensation" */
+        .tooltip {
+            display: inline-block;
+            position: relative;
+            cursor: help;
+        }
+
+        .tip-label {
+            color: #9db9ff;
+            font-size: 13px;
+            border-bottom: 1px dotted rgba(255, 255, 255, 0.3);
+        }
+
+        .tooltip-content {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%) translateY(0);
+            bottom: 120%;
+            background: #0f172a;
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 12px;
+            width: 280px;
+            box-shadow: 0 8px 24px rgba(47, 128, 237, 0.15);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            z-index: 5;
+        }
+
+        .tooltip:hover .tooltip-content,
+        .tooltip:focus-within .tooltip-content {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateX(-50%) translateY(-4px);
+        }
+
+        .btn-primary {
+            background: transparent;
+            border: 1px solid #2F80ED;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 15px;
+            font-weight: 500;
+            opacity: 0;
+            width: 100%;
+            margin-bottom: 16px;
+        }
+
+        .btn-primary:hover {
+            box-shadow: 0 0 10px rgba(47, 128, 237, 0.2);
+            transform: scale(1.02);
+            background: rgba(47, 128, 237, 0.06);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .wallet-status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 20px;
+            padding: 12px;
+            border-radius: 8px;
+            background: rgba(47, 128, 237, 0.1);
+            border: 1px solid rgba(47, 128, 237, 0.2);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: white;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #333;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            color: white;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #2F80ED;
+            box-shadow: 0 0 0 2px rgba(47, 128, 237, 0.1);
+        }
+
+        .coverage-selector {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        .coverage-option {
+            padding: 12px 8px;
+            border: 1px solid #333;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .coverage-option:hover {
+            border-color: #2F80ED;
+        }
+
+        .coverage-option.selected {
+            border-color: #2F80ED;
+            background: rgba(47, 128, 237, 0.1);
+        }
+
+        .cost-display {
+            background: rgba(47, 128, 237, 0.1);
+            border: 1px solid rgba(47, 128, 237, 0.2);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .cost-display .amount {
+            font-size: 18px;
+            font-weight: 500;
+            color: white;
+        }
+
+        .protection-status {
+            background: rgba(74, 222, 128, 0.1);
+            border: 1px solid rgba(74, 222, 128, 0.2);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .protection-status h3 {
+            color: #4ade80;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .progress-container {
+            margin-top: 16px;
+        }
+
+        .progress-bar-bg {
+            height: 8px;
+            border-radius: 4px;
+            background: rgba(47, 128, 237, 0.2);
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: #2F80ED;
+            transition: all 1s ease;
+            border-radius: 4px;
+        }
+
+        .countdown-text {
+            font-size: 12px;
+            margin-top: 8px;
+            opacity: 0.8;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .fade-in {
+            opacity: 1 !important;
+        }
+
+        .network-warning {
+            background: rgba(251, 191, 36, 0.1);
+            border: 1px solid rgba(251, 191, 36, 0.2);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 16px;
+            color: #fbbf24;
+            font-size: 14px;
+        }
+
+        footer {
+            opacity: 0.6;
+            font-size: 12px;
+            margin-top: 24px;
+            text-align: center;
+            line-height: 1.4;
+        }
+
+        footer a {
+            color: #2F80ED;
+            text-decoration: none;
+            transition: opacity 0.3s ease;
+        }
+
+        footer a:hover {
+            opacity: 0.8;
+        }
+
+        /* Wallet Modal Styles */
+        .wallet-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+
+        .wallet-modal-backdrop {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(4px);
+        }
+
+        .wallet-modal-content {
+            position: relative;
+            background: #111320;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 24px;
+            min-width: 280px;
+            max-width: 320px;
+            transform: scale(0.9);
+            transition: transform 0.3s ease;
+        }
+
+        .wallet-modal:not(.hidden) .wallet-modal-content {
+            transform: scale(1);
+        }
+
+        .wallet-modal h3 {
+            margin: 0 0 20px 0;
+            font-size: 18px;
+            font-weight: 500;
+            text-align: center;
+            color: #ffffff;
+        }
+
+        .wallet-options {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .wallet-option {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 14px 20px;
+            color: #ffffff;
+            font-family: 'Space Grotesk', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+            font-weight: 400;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+
+        .wallet-option:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.2);
+            transform: scale(1.02);
+            box-shadow: 0 4px 20px rgba(47, 128, 237, 0.15);
+        }
+
+        @media (max-width: 480px) {
+            #card {
+                padding: 20px;
+                margin: 10px;
+            }
+            
+            .shield {
+                font-size: 48px;
+            }
+            
+            h1 {
+                font-size: 20px;
+            }
+            
+            .coverage-selector {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="card">
+        <!-- Initial State -->
+        <div id="initial-state">
+            <div class="shield shield-idle shield-pulse shield-neon">🛡️</div>
+            <h1 id="title">BaseShield</h1>
+            <div class="tagline" id="tagline">Protect your Base actions from failed claims — instantly compensated under $1.</div>
+            <div class="tooltip" aria-label="automatic compensation info">
+                <span class="tip-label">automatic compensation</span>
+                <div class="tooltip-content" role="tooltip">If your on-chain claim fails before deadline, BaseShield auto-pays your coverage.</div>
+            </div>
+            <button class="btn-primary" id="get-protected-btn">Get Protected</button>
+        </div>
+
+        <!-- Wallet Connection State -->
+        <div id="wallet-state" class="hidden">
+            <div class="shield shield-connected shield-neon">🛡️</div>
+            <div class="wallet-status">
+                <span>✅</span>
+                <span id="wallet-status-text">Wallet connected</span>
+            </div>
+            <div id="network-warning" class="network-warning hidden">
+                Please switch to Base network
+                <button class="btn-primary" id="switch-network-btn" style="margin-top: 8px; width: auto; padding: 6px 12px;">Switch to Base</button>
+            </div>
+        </div>
+
+        <!-- Policy Form State -->
+        <div id="form-state" class="hidden">
+            <div class="shield shield-connected shield-neon">🛡️</div>
+            
+            <div class="form-group">
+                <label for="contract-address">Reward contract address</label>
+                <input type="text" id="contract-address" placeholder="0x..." />
+            </div>
+
+            <div class="form-group">
+                <label>Coverage Amount</label>
+                <div class="coverage-selector">
+                    <div class="coverage-option" data-amount="0.5">0.5 USDC</div>
+                    <div class="coverage-option selected" data-amount="1">1 USDC</div>
+                    <div class="coverage-option" data-amount="2">2 USDC</div>
+                </div>
+            </div>
+
+            <div class="cost-display">
+                <div class="amount" id="coverage-amount">Coverage: 1.00 USDC</div>
+                <div class="amount" id="fee-amount">Peace-of-mind fee: 0.20 USDC</div>
+                <div>You’ll pay:</div>
+                <div class="amount" id="total-cost">1.20 USDC</div>
+            </div>
+
+            <button class="btn-primary hidden" id="shield-claim-btn">🛡️ Shield This Claim</button>
+            <div id="connect-hint" style="font-size: 12px; color: #e0e0ffcc; opacity: 0.75; margin-top: 8px;" class="hidden">Connect your wallet to proceed.</div>
+        </div>
+
+        <!-- Protection Active State -->
+        <div id="protection-state" class="hidden">
+            <div class="shield shield-protected shield-neon">🛡️</div>
+            
+            <div class="protection-status">
+                <h3>You're Protected!</h3>
+                <div id="protection-until">Protected until <span id="deadline-time"></span></div>
+                
+                <div class="progress-container">
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar" id="progress-bar"></div>
+                    </div>
+                    <div class="countdown-text" id="countdown-text"></div>
+                </div>
+            </div>
+
+            <button class="btn-primary hidden" id="verify-claim-btn">Verify & Claim</button>
+        </div>
+    </div>
+
+    <!-- Wallet Selection Modal -->
+    <div id="wallet-modal" class="wallet-modal hidden">
+        <div class="wallet-modal-backdrop"></div>
+        <div class="wallet-modal-content">
+            <h3>Choose Wallet</h3>
+            <div class="wallet-options">
+                <button class="wallet-option" data-wallet="base">Base Wallet</button>
+                <button class="wallet-option" data-wallet="metamask">MetaMask</button>
+                <button class="wallet-option" data-wallet="walletconnect">Other Wallet (WalletConnect)</button>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        BaseShield · Experimental · Built for Base<br>
+        <a href="https://x.com/yourhandle">🐦 Follow</a>
+    </footer>
+
+    <script>
+        // Constants
+        const BASE_CHAIN_ID = 8453;
+        const BASE_RPC = 'https://mainnet.base.org';
+        
+        // Contracts (embedded constants)
+        const POLICY_MANAGER_ADDRESS = "0x53b4f001E05851D34658d677231D1508660eFA7C";
+        const USDC_ADDRESS = '0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897'; // Base Sepolia Circle USDC (checksummed)
+
+        // Minimal ABIs
+        const POLICY_MANAGER_ABI = [
+            "event PolicyCreated(bytes32 indexed policyId, address indexed user, address indexed target, uint256 deadline, uint256 coverage)",
+            "event PolicyResolved(bytes32 indexed policyId, bool compensated)",
+            "function createPolicy(address targetContract, uint256 deadline, uint256 coverageAmount) returns (bytes32)",
+            "function verifyAndPayout(bytes32 policyId)"
+        ];
+
+        const ERC20_ABI = [
+            "function approve(address spender, uint256 amount) returns (bool)",
+            "function allowance(address owner, address spender) view returns (uint256)",
+            "function balanceOf(address account) view returns (uint256)",
+            "function decimals() view returns (uint8)"
+        ];
+
+        const DEFAULT_POLICY_DURATION_SEC = 24 * 60 * 60; // 24 hours
+
+        // Current policy state (in-memory)
+        let currentPolicy = null; // { id, coverageWei, feeWei, totalWei, deadlineTs, target }
+
+        // Helpers
+        function formatUSDC(wei) {
+            try {
+                return Number(ethers.formatUnits(wei, 6)).toFixed(2);
+            } catch { return '0.00'; }
+        }
+
+        function getFriendlyErrorMessage(error, context) {
+            const msg = (error?.shortMessage || error?.message || '').toLowerCase();
+            if (msg.includes('user rejected') || error?.code === 4001) {
+                if (context === 'approve') return 'Please approve USDC spending to continue.';
+                return 'Transaction cancelled.';
+            }
+            if (msg.includes('invalid address')) return 'Please enter a valid contract address.';
+            if (msg.includes('policyalreadyresolved')) return 'Policy already resolved.';
+            if (msg.includes('deadlinenotpassed')) return 'Please wait until the protection period ends.';
+            if (msg.includes('insufficientallowance')) return 'USDC allowance too low — please approve again.';
+            if (msg.includes('invaliddeadline')) return 'Invalid deadline — please retry.';
+            return 'Transaction failed — try again.';
+        }
+        
+        // Global state
+        let provider = null;
+        let signer = null;
+        let currentState = 'initial';
+        let selectedCoverage = 1;
+        let protectionDeadline = null;
+        let countdownInterval = null;
+        let detectedWallet = null;
+        let connectedWalletType = null;
+        let walletConnectProvider = null;
+
+        // DOM elements
+        const elements = {
+            card: document.getElementById('card'),
+            initialState: document.getElementById('initial-state'),
+            walletState: document.getElementById('wallet-state'),
+            formState: document.getElementById('form-state'),
+            protectionState: document.getElementById('protection-state'),
+            title: document.getElementById('title'),
+            tagline: document.getElementById('tagline'),
+            getProtectedBtn: document.getElementById('get-protected-btn'),
+            walletStatusText: document.getElementById('wallet-status-text'),
+            networkWarning: document.getElementById('network-warning'),
+            switchNetworkBtn: document.getElementById('switch-network-btn'),
+            contractAddress: document.getElementById('contract-address'),
+            coverageAmount: document.getElementById('coverage-amount'),
+            feeAmount: document.getElementById('fee-amount'),
+            totalCost: document.getElementById('total-cost'),
+            shieldClaimBtn: document.getElementById('shield-claim-btn'),
+            deadlineTime: document.getElementById('deadline-time'),
+            progressBar: document.getElementById('progress-bar'),
+            countdownText: document.getElementById('countdown-text'),
+            verifyClaimBtn: document.getElementById('verify-claim-btn'),
+            walletModal: document.getElementById('wallet-modal'),
+            walletModalBackdrop: document.querySelector('.wallet-modal-backdrop')
+        };
+
+        // Initialize app
+        async function init() {
+            console.log('BaseShield initializing...');
+            // Warn if PolicyManager address is still a placeholder
+            try {
+                if (!ethers.isAddress(POLICY_MANAGER_ADDRESS) || POLICY_MANAGER_ADDRESS === '0x0000000000000000000000000000000000000000') {
+                    console.warn('[BaseShield] POLICY_MANAGER_ADDRESS is not set. Update index.html with your deployed PolicyManager address on Base to enable live contract calls.');
+                }
+            } catch {}
+            
+            // Silent wallet detection
+            detectAvailableWallets();
+            
+            // Start reveal sequence
+            setTimeout(() => {
+                elements.title.classList.add('fade-in');
+            }, 100);
+            
+            setTimeout(() => {
+                elements.tagline.classList.add('fade-in');
+            }, 2000);
+            
+            setTimeout(() => {
+                elements.getProtectedBtn.classList.add('fade-in');
+                // Update button text based on detected wallet
+                updateConnectButtonText();
+            }, 3000);
+
+            // Setup event listeners
+            setupEventListeners();
+        }
+
+        function detectAvailableWallets() {
+            // Check for Base Wallet first (native to Base)
+            if (window.base) {
+                detectedWallet = 'base';
+                console.log('Base Wallet detected');
+                return;
+            }
+            
+            // Check for MetaMask
+            if (window.ethereum && window.ethereum.isMetaMask) {
+                detectedWallet = 'metamask';
+                console.log('MetaMask detected');
+                return;
+            }
+            
+            console.log('No wallet detected - will show modal on connect');
+        }
+
+        function updateConnectButtonText() {
+            if (detectedWallet === 'base') {
+                elements.getProtectedBtn.innerHTML = '👛 Connect with Base Wallet';
+            } else if (detectedWallet === 'metamask') {
+                elements.getProtectedBtn.innerHTML = '👛 Connect with MetaMask';
+            } else {
+                elements.getProtectedBtn.innerHTML = '👛 Connect Wallet';
+            }
+        }
+
+        function setupEventListeners() {
+            elements.getProtectedBtn.addEventListener('click', handleGetProtected);
+            elements.switchNetworkBtn.addEventListener('click', switchToBase);
+            elements.shieldClaimBtn.addEventListener('click', createPolicy);
+            elements.verifyClaimBtn.addEventListener('click', verifyClaim);
+            
+            // Wallet modal events
+            elements.walletModalBackdrop.addEventListener('click', closeWalletModal);
+            document.querySelectorAll('.wallet-option').forEach(option => {
+                option.addEventListener('click', (e) => handleWalletSelection(e.target.dataset.wallet));
+            });
+            
+            // Coverage selector
+            document.querySelectorAll('.coverage-option').forEach(option => {
+                option.addEventListener('click', () => { 
+                    // استخدم العنصر نفسه بدل e.target لتجنب مشاكل العقد النصية
+                    selectCoverage(option);
+                    updateShieldButtonVisibility();
+                });
+            });
+            
+            // Contract address input: أحداث إضافية لضمان التحديث دائماً
+            const updateFromAddressField = () => {
+                updateCostDisplay();
+                updateShieldButtonVisibility();
+            };
+            elements.contractAddress.addEventListener('input', updateFromAddressField);
+            elements.contractAddress.addEventListener('change', updateFromAddressField);
+            elements.contractAddress.addEventListener('keyup', updateFromAddressField);
+        }
+
+        async function handleGetProtected() {
+            // If already connected, go to form
+            if (provider) {
+                showFormState();
+                return;
+            }
+
+            // If wallet detected, connect immediately
+            if (detectedWallet) {
+                await connectWallet(detectedWallet);
+            } else {
+                // Show wallet selection modal
+                showWalletModal();
+            }
+        }
+
+        function showWalletModal() {
+            elements.walletModal.classList.remove('hidden');
+        }
+
+        function closeWalletModal() {
+            elements.walletModal.classList.add('hidden');
+        }
+
+        async function handleWalletSelection(walletType) {
+            closeWalletModal();
+            await connectWallet(walletType);
+        }
+
+        async function connectWallet(walletType) {
+            try {
+                let ethereum;
+                connectedWalletType = walletType;
+                
+                if (walletType === 'base') {
+                    if (!window.base) {
+                        throw new Error('Base Wallet not found. Please install Base Wallet.');
+                    }
+                    ethereum = window.base;
+                    
+                } else if (walletType === 'metamask') {
+                    if (!window.ethereum || !window.ethereum.isMetaMask) {
+                        throw new Error('MetaMask not found. Please install MetaMask.');
+                    }
+                    ethereum = window.ethereum;
+                    
+                } else if (walletType === 'walletconnect') {
+                    try {
+                        // Show loading message
+                        showInlineError('Loading WalletConnect... Please wait.');
+                        
+                        // Lazy load WalletConnect
+                        const EthereumProvider = await window.loadWalletConnect();
+                        
+                        if (!EthereumProvider || typeof EthereumProvider.init !== 'function') {
+                            throw new Error('WalletConnect provider not properly loaded');
+                        }
+                        
+                        // Resolve required WalletConnect projectId
+                        let projectId = await resolveWalletConnectProjectId();
+                        if (!projectId) {
+                            throw new Error('Missing WalletConnect projectId. Set in .env (WALLETCONNECT_PROJECT_ID), localStorage, or use ?wc_pid=<id> in URL, then retry.');
+                        }
+
+                        // Clear loading message
+                        const errorEl = document.getElementById('inline-error');
+                        if (errorEl) errorEl.remove();
+                        
+                        walletConnectProvider = await EthereumProvider.init({
+                            projectId,
+                            chains: [BASE_CHAIN_ID],
+                            showQrModal: true,
+                            metadata: {
+                                name: 'BaseShield',
+                                description: 'Automatic protection for your Base actions',
+                                url: window.location.origin,
+                                icons: ['https://avatars.githubusercontent.com/u/37784886']
+                            }
+                        });
+                        
+                        await walletConnectProvider.enable();
+                        ethereum = walletConnectProvider;
+                        
+                    } catch (wcError) {
+                        console.error('WalletConnect connection error:', wcError);
+                        
+                        // Provide specific error messages based on the error type
+                        let errorMessage = 'WalletConnect connection failed. ';
+                        
+                        if (wcError.message.includes('CDN sources failed')) {
+                            errorMessage += 'Please check your internet connection or try Base Wallet/MetaMask instead.';
+                        } else if (wcError.message.includes('User rejected')) {
+                            errorMessage += 'Connection was cancelled.';
+                        } else if (wcError.message.includes('Missing WalletConnect projectId')) {
+                            errorMessage += 'Add WALLETCONNECT_PROJECT_ID in .env or localStorage, then retry.';
+                        } else if (wcError.message.includes('Project not found') || wcError.message.includes('code: 3000')) {
+                            errorMessage += 'Invalid projectId. Use a valid ID from cloud.walletconnect.com.';
+                        } else {
+                            errorMessage += 'Please try Base Wallet or MetaMask for a faster connection.';
+                        }
+                        
+                        throw new Error(errorMessage);
+                    }
+                    
+                } else {
+                    throw new Error('Unsupported wallet type');
+                }
+
+                provider = new ethers.BrowserProvider(ethereum);
+                const accounts = await provider.send('eth_requestAccounts', []);
+                signer = await provider.getSigner();
+                
+                console.log(`${walletType} connected:`, accounts[0]);
+                
+                // Update button text with connection status
+                updateConnectedButtonText(accounts[0]);
+                
+                // Check network
+                const network = await provider.getNetwork();
+                if (Number(network.chainId) !== BASE_CHAIN_ID) {
+                    showWalletState();
+                    showNetworkWarning();
+                } else {
+                    showWalletState();
+                    setTimeout(() => showFormState(), 1500);
+                }
+                
+            } catch (error) {
+                console.error('Wallet connection error:', error);
+                showInlineError(`Failed to connect ${walletType}. ${error.message}`);
+            }
+        }
+
+        function updateConnectedButtonText(address) {
+            const shortAddress = address.slice(0, 6) + '...' + address.slice(-4);
+            let walletName = '';
+            
+            switch(connectedWalletType) {
+                case 'base':
+                    walletName = 'Base Wallet';
+                    break;
+                case 'metamask':
+                    walletName = 'MetaMask';
+                    break;
+                case 'walletconnect':
+                    walletName = 'WalletConnect';
+                    break;
+            }
+            
+            elements.getProtectedBtn.innerHTML = `✅ Protected with ${walletName} (${shortAddress})`;
+        }
+
+        function showInlineError(message) {
+            // Select a visible container based on current state
+            let parentEl = elements.initialState;
+            switch (currentState) {
+                case 'form': parentEl = elements.formState; break;
+                case 'wallet': parentEl = elements.walletState; break;
+                case 'protection': parentEl = elements.protectionState; break;
+            }
+
+            // Create or update inline error message
+            let errorEl = document.getElementById('inline-error');
+            if (!errorEl) {
+                errorEl = document.createElement('div');
+                errorEl.id = 'inline-error';
+                errorEl.style.cssText = `
+                    background: rgba(239, 68, 68, 0.1);
+                    border: 1px solid rgba(239, 68, 68, 0.2);
+                    border-radius: 8px;
+                    padding: 12px;
+                    margin-top: 16px;
+                    color: #ef4444;
+                    font-size: 14px;
+                    text-align: center;
+                `;
+                parentEl.appendChild(errorEl);
+            } else if (errorEl.parentNode !== parentEl) {
+                // Move error to the currently visible container
+                errorEl.parentNode.removeChild(errorEl);
+                parentEl.appendChild(errorEl);
+            }
+            
+            errorEl.textContent = message;
+            setTimeout(() => {
+                if (errorEl.parentNode) {
+                    errorEl.parentNode.removeChild(errorEl);
+                }
+            }, 5000);
+        }
+
+        async function switchToBase() {
+            try {
+                // Update button to show loading state
+                elements.switchNetworkBtn.textContent = 'Switching...';
+                elements.switchNetworkBtn.disabled = true;
+                
+                await provider.send('wallet_switchEthereumChain', [
+                    { chainId: '0x' + BASE_CHAIN_ID.toString(16) }
+                ]);
+                
+                elements.networkWarning.classList.add('hidden');
+                setTimeout(() => showFormState(), 1000);
+                
+            } catch (error) {
+                if (error.code === 4902) {
+                    // Chain not added, add it
+                    try {
+                        await provider.send('wallet_addEthereumChain', [{
+                            chainId: '0x' + BASE_CHAIN_ID.toString(16),
+                            chainName: 'Base',
+                            nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                            rpcUrls: [BASE_RPC],
+                            blockExplorerUrls: ['https://basescan.org']
+                        }]);
+                        elements.networkWarning.classList.add('hidden');
+                        setTimeout(() => showFormState(), 1000);
+                    } catch (addError) {
+                        console.error('Failed to add Base network:', addError);
+                        showNetworkSwitchError('Failed to add Base network. Please add it manually.');
+                    }
+                } else if (error.code === 4001) {
+                    // User rejected
+                    showNetworkSwitchError('Please approve network switch in your wallet');
+                } else {
+                    console.error('Failed to switch network:', error);
+                    showNetworkSwitchError('Failed to switch network. Please try again.');
+                }
+            } finally {
+                // Reset button state
+                elements.switchNetworkBtn.textContent = 'Switch to Base';
+                elements.switchNetworkBtn.disabled = false;
+            }
+        }
+
+        function showNetworkSwitchError(message) {
+            const warningEl = elements.networkWarning;
+            const originalHTML = warningEl.innerHTML;
+            
+            warningEl.innerHTML = `
+                <div style="color: #ef4444; margin-bottom: 8px;">${message}</div>
+                ${originalHTML}
+            `;
+            
+            // Reset after 5 seconds
+            setTimeout(() => {
+                warningEl.innerHTML = originalHTML;
+            }, 5000);
+        }
+
+        function showWalletState() {
+            setState('wallet');
+            elements.walletStatusText.textContent = 'Wallet connected';
+        }
+
+        function showNetworkWarning() {
+            elements.networkWarning.classList.remove('hidden');
+        }
+
+        function showFormState() {
+            setState('form');
+            updateCostDisplay();
+            updateShieldButtonVisibility();
+        }
+
+        function updateShieldButtonVisibility() {
+            const addr = elements.contractAddress.value.trim();
+            const hasSelectedCoverage = Boolean(document.querySelector('.coverage-option.selected'));
+            // فحص متين لعنوان الإيثريوم
+            const looksValid = (typeof ethers !== 'undefined' && ethers.isAddress)
+                ? ethers.isAddress(addr)
+                : (addr.length > 0 && addr.toLowerCase().startsWith('0x'));
+
+            if (looksValid && hasSelectedCoverage) {
+                elements.shieldClaimBtn.classList.remove('hidden');
+                elements.shieldClaimBtn.classList.add('fade-in');
+            } else {
+                elements.shieldClaimBtn.classList.add('hidden');
+                elements.shieldClaimBtn.classList.remove('fade-in');
+            }
+
+            // إظهار التلميح عند ظهور الزر وعدم اتصال محفظة
+            const buttonVisible = !elements.shieldClaimBtn.classList.contains('hidden');
+            const hintEl = document.getElementById('connect-hint');
+            if (hintEl) {
+                if (buttonVisible && (!provider || !signer)) {
+                    hintEl.classList.remove('hidden');
+                } else {
+                    hintEl.classList.add('hidden');
+                }
+            }
+        }
+
+        function selectCoverage(option) {
+            document.querySelectorAll('.coverage-option').forEach(opt => 
+                opt.classList.remove('selected')
+            );
+            option.classList.add('selected');
+            selectedCoverage = parseFloat(option.dataset.amount);
+            updateCostDisplay();
+        }
+
+        function updateCostDisplay() {
+            // Accurate fee math (20% fee capped between 0.2 and 0.5 USDC)
+            const coverageWei = ethers.parseUnits(String(selectedCoverage), 6);
+            let feeWei = (coverageWei * 20n) / 100n;
+            const MIN_FEE_WEI = 200000n; // 0.2 USDC
+            const MAX_FEE_WEI = 500000n; // 0.5 USDC
+            if (feeWei < MIN_FEE_WEI) feeWei = MIN_FEE_WEI;
+            if (feeWei > MAX_FEE_WEI) feeWei = MAX_FEE_WEI;
+            const totalWei = coverageWei + feeWei;
+
+            elements.coverageAmount.textContent = `Coverage: ${formatUSDC(coverageWei)} USDC`;
+            elements.feeAmount.textContent = `Peace-of-mind fee: ${formatUSDC(feeWei)} USDC`;
+            elements.totalCost.textContent = `${formatUSDC(totalWei)} USDC`;
+        }
+
+        async function createPolicy() {
+            const target = elements.contractAddress.value.trim();
+            
+            // Validate address format
+            if (!ethers.isAddress(target)) {
+                showInlineError('Please enter a valid contract address');
+                return;
+            }
+
+            try {
+                if (!provider || !signer) {
+                    showInlineError('Please connect a wallet to continue.');
+                    showWalletModal();
+                    return;
+                }
+
+                // Ensure we are on Base
+                const network = await provider.getNetwork();
+                if (Number(network.chainId) !== BASE_CHAIN_ID) {
+                    showWalletState();
+                    showNetworkWarning();
+                    return;
+                }
+
+                // Compute coverage/fee/total (6 decimals)
+                const coverageWei = ethers.parseUnits(String(selectedCoverage), 6);
+                let feeWei = (coverageWei * 20n) / 100n;
+                const MIN_FEE_WEI = 200000n, MAX_FEE_WEI = 500000n;
+                if (feeWei < MIN_FEE_WEI) feeWei = MIN_FEE_WEI;
+                if (feeWei > MAX_FEE_WEI) feeWei = MAX_FEE_WEI;
+                const totalWei = coverageWei + feeWei;
+
+                // Require a valid PolicyManager address
+                if (!ethers.isAddress(POLICY_MANAGER_ADDRESS) || POLICY_MANAGER_ADDRESS === '0x0000000000000000000000000000000000000000') {
+                    showInlineError('Set POLICY_MANAGER_ADDRESS to your deployed PolicyManager address on Base.');
+                    return;
+                }
+
+                elements.shieldClaimBtn.disabled = true;
+                elements.shieldClaimBtn.textContent = 'Creating Protection...';
+
+                // Approve USDC spending
+                const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, signer);
+                try {
+                const approveTx = await usdc.approve(POLICY_MANAGER_ADDRESS, totalWei);
+                    await approveTx.wait();
+                } catch (approveErr) {
+                    console.error('USDC approve error:', approveErr);
+                    showInlineError(getFriendlyErrorMessage(approveErr, 'approve'));
+                    elements.shieldClaimBtn.disabled = false;
+                    elements.shieldClaimBtn.textContent = '🛡️ Shield This Claim';
+                    return;
+                }
+
+                // Create policy
+                const policyManager = new ethers.Contract(POLICY_MANAGER_ADDRESS, POLICY_MANAGER_ABI, signer);
+                const deadlineTs = Math.floor(Date.now() / 1000) + DEFAULT_POLICY_DURATION_SEC;
+                let policyId = null;
+
+                const tx = await policyManager.createPolicy(target, deadlineTs, coverageWei);
+                const receipt = await tx.wait();
+
+                // Parse PolicyCreated event
+                if (receipt && receipt.logs) {
+                    for (const log of receipt.logs) {
+                        try {
+                            if (log.address && log.address.toLowerCase() !== POLICY_MANAGER_ADDRESS.toLowerCase()) continue;
+                            const parsed = policyManager.interface.parseLog(log);
+                            if (parsed && parsed.name === 'PolicyCreated') {
+                                policyId = parsed.args.policyId;
+                                const evDeadline = Number(parsed.args.deadline);
+                                const evCoverage = BigInt(parsed.args.coverage.toString());
+                                currentPolicy = {
+                                    id: policyId,
+                                    coverageWei: evCoverage,
+                                    feeWei,
+                                    totalWei,
+                                    deadlineTs: evDeadline,
+                                    target
+                                };
+                                break;
+                            }
+                        } catch (e) { /* ignore parse errors */ }
+                    }
+                }
+
+                // Fallback if event not parsed
+                if (!currentPolicy) {
+                    currentPolicy = { id: policyId, coverageWei, feeWei, totalWei, deadlineTs, target };
+                }
+
+                // Update UI
+                protectionDeadline = new Date(currentPolicy.deadlineTs * 1000);
+                showProtectionState();
+                startCountdown();
+
+                elements.shieldClaimBtn.disabled = false;
+                elements.shieldClaimBtn.textContent = '🛡️ Shield This Claim';
+
+            } catch (error) {
+                console.error('Policy creation error:', error);
+                showInlineError(getFriendlyErrorMessage(error));
+                elements.shieldClaimBtn.disabled = false;
+                elements.shieldClaimBtn.textContent = '🛡️ Shield This Claim';
+            }
+        }
+
+        function showProtectionState() {
+            setState('protection');
+            elements.deadlineTime.textContent = protectionDeadline.toLocaleString();
+        }
+
+        function startCountdown() {
+            if (countdownInterval) clearInterval(countdownInterval);
+            
+            countdownInterval = setInterval(() => {
+                const now = new Date();
+                const timeLeft = protectionDeadline - now;
+                
+                if (timeLeft <= 0) {
+                    // Protection expired
+                    clearInterval(countdownInterval);
+                    document.querySelector('.shield').className = 'shield shield-countdown';
+                    elements.progressBar.style.width = '0%';
+                    elements.countdownText.textContent = 'Protection expired';
+                    elements.verifyClaimBtn.classList.remove('hidden');
+                    return;
+                }
+                
+                // Update progress bar
+                const totalTime = 24 * 60 * 60 * 1000; // 24 hours
+                const elapsed = totalTime - timeLeft;
+                const progress = (elapsed / totalTime) * 100;
+                elements.progressBar.style.width = `${100 - progress}%`;
+                
+                // Update countdown text
+                const hours = Math.floor(timeLeft / (1000 * 60 * 60));
+                const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+                elements.countdownText.textContent = `${hours}h ${minutes}m remaining`;
+                
+            }, 1000);
+        }
+
+        async function verifyClaim() {
+            try {
+                if (!currentPolicy || !currentPolicy.id) {
+                    showInlineError('No policy to verify.');
+                    return;
+                }
+                if (!provider || !signer) {
+                    showInlineError('Please connect a wallet to continue.');
+                    showWalletModal();
+                    return;
+                }
+
+                const policyManager = new ethers.Contract(POLICY_MANAGER_ADDRESS, POLICY_MANAGER_ABI, signer);
+                const tx = await policyManager.verifyAndPayout(currentPolicy.id);
+                const receipt = await tx.wait();
+
+                let compensated = null;
+                if (receipt && receipt.logs) {
+                    for (const log of receipt.logs) {
+                        try {
+                            if (log.address && log.address.toLowerCase() !== POLICY_MANAGER_ADDRESS.toLowerCase()) continue;
+                            const parsed = policyManager.interface.parseLog(log);
+                            if (parsed && parsed.name === 'PolicyResolved') {
+                                compensated = Boolean(parsed.args.compensated);
+                                break;
+                            }
+                        } catch (e) { /* ignore parse errors */ }
+                    }
+                }
+
+                // Show result message
+                let resultEl = document.getElementById('payout-result');
+                if (!resultEl) {
+                    resultEl = document.createElement('div');
+                    resultEl.id = 'payout-result';
+                    resultEl.style.cssText = `
+                        background: rgba(255,255,255,0.05);
+                        border: 1px solid #333;
+                        border-radius: 8px;
+                        padding: 12px;
+                        margin-top: 12px;
+                        font-size: 14px;
+                        color: white;
+                    `;
+                    document.querySelector('.protection-status').appendChild(resultEl);
+                }
+
+                if (compensated === true) {
+                    resultEl.textContent = `✅ Compensated: ${formatUSDC(currentPolicy.coverageWei)} USDC`;
+                } else {
+                    resultEl.textContent = `ℹ️ No failure detected — fee retained (${formatUSDC(currentPolicy.feeWei)} USDC)`;
+                }
+
+                // Set shield to resolved
+                const shieldEl = document.querySelector('.shield');
+                if (shieldEl) shieldEl.className = 'shield shield-resolved';
+
+                // Disable verify button after resolution
+                elements.verifyClaimBtn.disabled = true;
+                elements.verifyClaimBtn.textContent = 'Verified';
+
+            } catch (error) {
+                console.error('Verify & Payout error:', error);
+                showInlineError(getFriendlyErrorMessage(error));
+            }
+        }
+
+        function setState(newState) {
+            // Hide all states
+            elements.initialState.classList.add('hidden');
+            elements.walletState.classList.add('hidden');
+            elements.formState.classList.add('hidden');
+            elements.protectionState.classList.add('hidden');
+            
+            // Show target state
+            switch(newState) {
+                case 'wallet':
+                    elements.walletState.classList.remove('hidden');
+                    break;
+                case 'form':
+                    elements.formState.classList.remove('hidden');
+                    break;
+                case 'protection':
+                    elements.protectionState.classList.remove('hidden');
+                    break;
+                default:
+                    elements.initialState.classList.remove('hidden');
+            }
+            
+            currentState = newState;
+        }
+
+        // Initialize when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+    </script>
+</body>
+</html>
