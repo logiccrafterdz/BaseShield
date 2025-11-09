@@ -2,7 +2,7 @@
 
 > Automatic peace of mind for your Base actions — insurance against Web3 frustration, not market volatility.
 
-![BaseShield UI](./artifacts/demo/demo.png)
+![BaseShield UI](./assets/demo.png)
 > From idle → protected → compensated — all in one seamless micro-experience.
 
 ## Why BaseShield?
@@ -41,11 +41,11 @@ npx serve
 A minimal smart contract (`PolicyManager.sol`) manages policies and payouts. The frontend (`index.html`) is a zero-dependency, single-file app using Ethers.js v6 — designed for trust and auditability.
 
 ```mermaid
-flowchart TD
-    U[User] --> W[Wallet]
-    W --> PM[PolicyManager (Base Sepolia)]
-    PM <-->|USDC| USDC[USDC 0x6Ac3aB54...D52897]
-    PM --> MRD[MockRewardDistributor (testing)]
+graph TD;
+    U[User] --> W[Wallet];
+    W --> PM[PolicyManager Base Sepolia];
+    PM -- USDC --> USDC[USDC: 0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897];
+    PM --> MRD[MockRewardDistributor testing];
 ```
 
 ## Security & Transparency
