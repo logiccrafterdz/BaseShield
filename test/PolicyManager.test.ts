@@ -160,7 +160,9 @@ describe("PolicyManager", function () {
     it("Should generate unique IDs for multiple policies in the same block", async function () {
       const deadline = (await time.latest()) + 86400;
 
-      await mockUSDC.connect(user1).approve(await policyManager.getAddress(), COVERAGE_AMOUNT * 2n);
+      const fee = await policyManager.calculateFee(COVERAGE_AMOUNT);
+      const totalPaymentPerPolicy = COVERAGE_AMOUNT + fee;
+      await mockUSDC.connect(user1).approve(await policyManager.getAddress(), totalPaymentPerPolicy * 2n);
 
       // We check that sequential calls produce different IDs
       const tx1 = await policyManager.connect(user1).createPolicy(targetContract.address, deadline, COVERAGE_AMOUNT);
@@ -195,7 +197,9 @@ describe("PolicyManager", function () {
     it("Should generate unique IDs for multiple policies in the same block", async function () {
       const deadline = (await time.latest()) + 86400;
 
-      await mockUSDC.connect(user1).approve(await policyManager.getAddress(), COVERAGE_AMOUNT * 2n);
+      const fee = await policyManager.calculateFee(COVERAGE_AMOUNT);
+      const totalPaymentPerPolicy = COVERAGE_AMOUNT + fee;
+      await mockUSDC.connect(user1).approve(await policyManager.getAddress(), totalPaymentPerPolicy * 2n);
 
       // We can't easily force same block in ethers v6 without manual mining, 
       // but the contract increments the nonce, so we just check they are different.
@@ -205,10 +209,14 @@ describe("PolicyManager", function () {
       const receipt1 = await tx1.wait();
       const receipt2 = await tx2.wait();
 
-      const id1 = policyManager.interface.parseLog(receipt1!.logs[0] as any)?.args[0];
-      const id2 = policyManager.interface.parseLog(receipt2!.logs[0] as any)?.args[0];
+      const event1 = policyManager.interface.parseLog(receipt1!.logs.find(l => {
+        try { return policyManager.interface.parseLog(l as any)?.name === "PolicyCreated"; } catch { return false; }
+      }) as any);
+      const event2 = policyManager.interface.parseLog(receipt2!.logs.find(l => {
+        try { return policyManager.interface.parseLog(l as any)?.name === "PolicyCreated"; } catch { return false; }
+      }) as any);
 
-      expect(id1).to.not.equal(id2);
+      expect(event1?.args[0]).to.not.equal(event2?.args[0]);
     });
 
     it("Should revert with insufficient allowance", async function () {

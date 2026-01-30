@@ -300,22 +300,15 @@ describe("PolicyManager - Comprehensive Tests", function () {
     it("Should ensure msg.sender is always the insured (policy owner)", async function () {
       const totalCost = COVERAGE_AMOUNT + EXPECTED_FEE;
 
-      // User1 creates a policy
+      // User1 approves and creates a policy
       await mockUSDC.connect(user1).approve(await policyManager.getAddress(), totalCost);
-      await policyManager.connect(user1).createPolicy(
+      const tx = await policyManager.connect(user1).createPolicy(
         await mockRewardContract.getAddress(),
         deadline,
         COVERAGE_AMOUNT
       );
 
-      // Generate policy ID for user1's policy
-      const currentTime = await time.latest();
-      const policyId = hre.ethers.keccak256(
-        hre.ethers.solidityPacked(
-          ["address", "address", "uint256"],
-          [user1.address, await mockRewardContract.getAddress(), currentTime]
-        )
-      );
+      const policyId = await getPolicyIdFromTx(tx);
 
       // Verify the policy was created with user1 as the owner
       const policy = await policyManager.policies(policyId);
