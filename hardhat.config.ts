@@ -5,7 +5,7 @@ import * as dotenv from "dotenv";
 dotenv.config();
 
 const config: HardhatUserConfig = {
-  defaultNetwork: "baseSepolia",
+  defaultNetwork: "hardhat",
   solidity: {
     version: "0.8.20",
     settings: {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -56,6 +56,7 @@ contract PolicyManager is Ownable, ReentrancyGuard, Pausable {
     // Mock claim tracking for MVP (will be replaced by event verification in production)
     mapping(bytes32 => bool) public mockClaimRegistered;
     mapping(address => mapping(address => uint256)) public lastClaimTime;
+    mapping(address => uint256) public userNonce;
 
     // Events
     event PolicyCreated(
@@ -78,7 +79,7 @@ contract PolicyManager is Ownable, ReentrancyGuard, Pausable {
     );
 
     // Custom errors
-    error InvalidUSDCAddress();
+    error InvalidTargetAddress();
     error InvalidCoverageAmount();
     error InvalidDeadline();
     error InsufficientAllowance();
@@ -92,7 +93,7 @@ contract PolicyManager is Ownable, ReentrancyGuard, Pausable {
      * @param _usdcToken Address of the USDC token contract
      */
     constructor(address _usdcToken) Ownable(msg.sender) {
-        if (_usdcToken == address(0)) revert InvalidUSDCAddress();
+        if (_usdcToken == address(0)) revert InvalidTargetAddress();
         usdcToken = IERC20(_usdcToken);
     }
 
@@ -125,11 +126,14 @@ contract PolicyManager is Ownable, ReentrancyGuard, Pausable {
         uint256 coverageAmount
     ) external nonReentrant whenNotPaused returns (bytes32 policyId) {
         // Validation
-        if (targetContract == address(0)) revert InvalidUSDCAddress();
+        if (targetContract == address(0)) revert InvalidTargetAddress();
         if (coverageAmount == 0) revert InvalidCoverageAmount();
-        // Use a fixed short deadline for testing/demo purposes
-        uint256 deadline = block.timestamp + 60; // 60 ثانية بدل 86400
-        if (deadline <= block.timestamp) revert InvalidDeadline();
+        
+        // Validate deadline: must be in the future and not too far (max 30 days)
+        if (requestedDeadline <= block.timestamp) revert InvalidDeadline();
+        if (requestedDeadline > block.timestamp + 30 days) revert InvalidDeadline();
+        
+        uint256 deadline = requestedDeadline;
 
         // Calculate fee and total payment required
         uint256 fee = calculateFee(coverageAmount);
@@ -140,8 +144,8 @@ contract PolicyManager is Ownable, ReentrancyGuard, Pausable {
             revert InsufficientAllowance();
         }
 
-        // Generate unique policy ID
-        policyId = keccak256(abi.encodePacked(msg.sender, targetContract, block.timestamp));
+        // Generate unique policy ID using sender, target, timestamp, and nonce to prevent collisions
+        policyId = keccak256(abi.encodePacked(msg.sender, targetContract, block.timestamp, userNonce[msg.sender]++));
 
         // Create policy
         policies[policyId] = Policy({

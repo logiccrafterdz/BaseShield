@@ -26,17 +26,17 @@ describe("PolicyManager - Comprehensive Tests", function () {
     const policyCreatedEvent = receipt?.logs.find(
       (log: any) => log.topics[0] === policyManager.interface.getEvent("PolicyCreated").topicHash
     );
-    
+
     if (!policyCreatedEvent) {
       throw new Error("PolicyCreated event not found");
     }
-    
+
     const decodedEvent = policyManager.interface.decodeEventLog(
       "PolicyCreated",
       policyCreatedEvent.data,
       policyCreatedEvent.topics
     );
-    
+
     return decodedEvent.policyId;
   }
 
@@ -44,16 +44,16 @@ describe("PolicyManager - Comprehensive Tests", function () {
     [owner, user1, user2, maliciousUser] = await hre.ethers.getSigners();
 
     // Deploy mock USDC token (6 decimals)
-    const MockERC20Factory = await hre.ethers.getContractFactory("MockERC20");
-    mockUSDC = await MockERC20Factory.deploy("Mock USDC", "USDC", 6);
+    mockUSDC = await hre.ethers.deployContract("MockERC20", ["Mock USDC", "USDC", 6], owner);
+    await mockUSDC.waitForDeployment();
 
     // Deploy mock reward contract
-    const MockRewardContractFactory = await hre.ethers.getContractFactory("MockRewardContract");
-    mockRewardContract = await MockRewardContractFactory.deploy();
+    mockRewardContract = await hre.ethers.deployContract("MockRewardContract", [], owner);
+    await mockRewardContract.waitForDeployment();
 
     // Deploy PolicyManager
-    const PolicyManagerFactory = await hre.ethers.getContractFactory("PolicyManager");
-    policyManager = await PolicyManagerFactory.deploy(await mockUSDC.getAddress());
+    policyManager = await hre.ethers.deployContract("PolicyManager", [await mockUSDC.getAddress()], owner);
+    await policyManager.waitForDeployment();
 
     // Mint USDC to users
     await mockUSDC.mint(user1.address, INITIAL_USDC_BALANCE);
@@ -367,7 +367,7 @@ describe("PolicyManager - Comprehensive Tests", function () {
   describe("Edge Cases and Additional Security", function () {
     it("Should handle non-existent policy verification", async function () {
       const fakePolicyId = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("fake"));
-      
+
       await expect(
         policyManager.connect(user1).verifyAndPayout(fakePolicyId)
       ).to.be.revertedWithCustomError(policyManager, "PolicyNotFound");
@@ -404,7 +404,7 @@ describe("PolicyManager - Comprehensive Tests", function () {
       // Should not revert and should fall back to mock tracking (no claim detected)
       const initialBalance = await mockUSDC.balanceOf(user1.address);
       await policyManager.connect(user1).verifyAndPayout(policyId);
-      
+
       // Should receive full coverage since no claim was detected
       const finalBalance = await mockUSDC.balanceOf(user1.address);
       expect(finalBalance).to.equal(initialBalance + BigInt(COVERAGE_AMOUNT));

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.0/dist/ethers.umd.min.js"></script>
-    
+
     <!-- WalletConnect v2 (lazy loaded) -->
     <script>
         // Browser polyfills for WalletConnect
@@ -20,7 +21,7 @@
         }
 
         // Prefer local vendored WalletConnect to avoid ORB blocking; fallback to CDNs
-        window.loadWalletConnect = async function() {
+        window.loadWalletConnect = async function () {
             // If already present, return immediately
             if (window.WalletConnectEthereumProvider) {
                 return window.WalletConnectEthereumProvider;
@@ -94,7 +95,7 @@
             const params = new URLSearchParams(window.location.search);
             const qp = params.get('wc_pid') || params.get('walletconnect_project_id');
             if (qp && qp.trim()) {
-                try { localStorage.setItem('WALLETCONNECT_PROJECT_ID', qp.trim()); } catch {}
+                try { localStorage.setItem('WALLETCONNECT_PROJECT_ID', qp.trim()); } catch { }
                 return qp.trim();
             }
 
@@ -102,7 +103,7 @@
             try {
                 const ls = localStorage.getItem('WALLETCONNECT_PROJECT_ID');
                 if (ls && ls.trim()) return ls.trim();
-            } catch {}
+            } catch { }
 
             // 4) .env file (only for local dev; avoid in production)
             try {
@@ -115,13 +116,13 @@
                         if (match && match[1]) {
                             const fromEnv = match[1].trim();
                             if (fromEnv) {
-                                try { localStorage.setItem('WALLETCONNECT_PROJECT_ID', fromEnv); } catch {}
+                                try { localStorage.setItem('WALLETCONNECT_PROJECT_ID', fromEnv); } catch { }
                                 return fromEnv;
                             }
                         }
                     }
                 }
-            } catch {}
+            } catch { }
 
             return null;
         }
@@ -179,15 +180,38 @@
             filter: drop-shadow(0 0 20px rgba(47, 128, 237, 0.18));
         }
 
-        .shield-idle { color: #666; }
-        .shield-connected { color: #2F80ED; }
-        .shield-protected { color: #4ade80; }
-        .shield-countdown { color: #fbbf24; }
-        .shield-resolved { color: #888; }
+        .shield-idle {
+            color: #666;
+        }
+
+        .shield-connected {
+            color: #2F80ED;
+        }
+
+        .shield-protected {
+            color: #4ade80;
+        }
+
+        .shield-countdown {
+            color: #fbbf24;
+        }
+
+        .shield-resolved {
+            color: #888;
+        }
 
         @keyframes pulse {
-            0%, 100% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.05); opacity: 0.8; }
+
+            0%,
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+
+            50% {
+                transform: scale(1.05);
+                opacity: 0.8;
+            }
         }
 
         .shield-pulse {
@@ -515,31 +539,34 @@
                 padding: 20px;
                 margin: 10px;
             }
-            
+
             .shield {
                 font-size: 48px;
             }
-            
+
             h1 {
                 font-size: 20px;
             }
-            
+
             .coverage-selector {
                 grid-template-columns: 1fr;
             }
         }
     </style>
 </head>
+
 <body>
     <div id="card">
         <!-- Initial State -->
         <div id="initial-state">
             <div class="shield shield-idle shield-pulse shield-neon">🛡️</div>
             <h1 id="title">BaseShield</h1>
-            <div class="tagline" id="tagline">Protect your Base actions from failed claims — instantly compensated under $1.</div>
+            <div class="tagline" id="tagline">Protect your Base actions from failed claims — instantly compensated under
+                $1.</div>
             <div class="tooltip" aria-label="automatic compensation info">
                 <span class="tip-label">automatic compensation</span>
-                <div class="tooltip-content" role="tooltip">If your on-chain claim fails before deadline, BaseShield auto-pays your coverage.</div>
+                <div class="tooltip-content" role="tooltip">If your on-chain claim fails before deadline, BaseShield
+                    auto-pays your coverage.</div>
             </div>
             <button class="btn-primary" id="get-protected-btn">Get Protected</button>
         </div>
@@ -553,14 +580,15 @@
             </div>
             <div id="network-warning" class="network-warning hidden">
                 Please switch to Base network
-                <button class="btn-primary" id="switch-network-btn" style="margin-top: 8px; width: auto; padding: 6px 12px;">Switch to Base</button>
+                <button class="btn-primary" id="switch-network-btn"
+                    style="margin-top: 8px; width: auto; padding: 6px 12px;">Switch to Base</button>
             </div>
         </div>
 
         <!-- Policy Form State -->
         <div id="form-state" class="hidden">
             <div class="shield shield-connected shield-neon">🛡️</div>
-            
+
             <div class="form-group">
                 <label for="contract-address">Reward contract address</label>
                 <input type="text" id="contract-address" placeholder="0x..." />
@@ -583,17 +611,18 @@
             </div>
 
             <button class="btn-primary hidden" id="shield-claim-btn">🛡️ Shield This Claim</button>
-            <div id="connect-hint" style="font-size: 12px; color: #e0e0ffcc; opacity: 0.75; margin-top: 8px;" class="hidden">Connect your wallet to proceed.</div>
+            <div id="connect-hint" style="font-size: 12px; color: #e0e0ffcc; opacity: 0.75; margin-top: 8px;"
+                class="hidden">Connect your wallet to proceed.</div>
         </div>
 
         <!-- Protection Active State -->
         <div id="protection-state" class="hidden">
             <div class="shield shield-protected shield-neon">🛡️</div>
-            
+
             <div class="protection-status">
                 <h3>You're Protected!</h3>
                 <div id="protection-until">Protected until <span id="deadline-time"></span></div>
-                
+
                 <div class="progress-container">
                     <div class="progress-bar-bg">
                         <div class="progress-bar" id="progress-bar"></div>
@@ -626,9 +655,9 @@
 
     <script>
         // Constants
-        const BASE_CHAIN_ID = 8453;
-        const BASE_RPC = 'https://mainnet.base.org';
-        
+        const BASE_CHAIN_ID = 84532;
+        const BASE_RPC = 'https://sepolia.base.org';
+
         // Contracts (embedded constants)
         const POLICY_MANAGER_ADDRESS = "0x53b4f001E05851D34658d677231D1508660eFA7C";
         const USDC_ADDRESS = '0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897'; // Base Sepolia Circle USDC (checksummed)
@@ -666,14 +695,14 @@
                 if (context === 'approve') return 'Please approve USDC spending to continue.';
                 return 'Transaction cancelled.';
             }
-            if (msg.includes('invalid address')) return 'Please enter a valid contract address.';
+            if (msg.includes('invalidtargetaddress')) return 'Please enter a valid contract address.';
             if (msg.includes('policyalreadyresolved')) return 'Policy already resolved.';
             if (msg.includes('deadlinenotpassed')) return 'Please wait until the protection period ends.';
             if (msg.includes('insufficientallowance')) return 'USDC allowance too low — please approve again.';
             if (msg.includes('invaliddeadline')) return 'Invalid deadline — please retry.';
             return 'Transaction failed — try again.';
         }
-        
+
         // Global state
         let provider = null;
         let signer = null;
@@ -719,20 +748,20 @@
                 if (!ethers.isAddress(POLICY_MANAGER_ADDRESS) || POLICY_MANAGER_ADDRESS === '0x0000000000000000000000000000000000000000') {
                     console.warn('[BaseShield] POLICY_MANAGER_ADDRESS is not set. Update index.html with your deployed PolicyManager address on Base to enable live contract calls.');
                 }
-            } catch {}
-            
+            } catch { }
+
             // Silent wallet detection
             detectAvailableWallets();
-            
+
             // Start reveal sequence
             setTimeout(() => {
                 elements.title.classList.add('fade-in');
             }, 100);
-            
+
             setTimeout(() => {
                 elements.tagline.classList.add('fade-in');
             }, 2000);
-            
+
             setTimeout(() => {
                 elements.getProtectedBtn.classList.add('fade-in');
                 // Update button text based on detected wallet
@@ -750,14 +779,14 @@
                 console.log('Base Wallet detected');
                 return;
             }
-            
+
             // Check for MetaMask
             if (window.ethereum && window.ethereum.isMetaMask) {
                 detectedWallet = 'metamask';
                 console.log('MetaMask detected');
                 return;
             }
-            
+
             console.log('No wallet detected - will show modal on connect');
         }
 
@@ -776,22 +805,22 @@
             elements.switchNetworkBtn.addEventListener('click', switchToBase);
             elements.shieldClaimBtn.addEventListener('click', createPolicy);
             elements.verifyClaimBtn.addEventListener('click', verifyClaim);
-            
+
             // Wallet modal events
             elements.walletModalBackdrop.addEventListener('click', closeWalletModal);
             document.querySelectorAll('.wallet-option').forEach(option => {
                 option.addEventListener('click', (e) => handleWalletSelection(e.target.dataset.wallet));
             });
-            
+
             // Coverage selector
             document.querySelectorAll('.coverage-option').forEach(option => {
-                option.addEventListener('click', () => { 
+                option.addEventListener('click', () => {
                     // استخدم العنصر نفسه بدل e.target لتجنب مشاكل العقد النصية
                     selectCoverage(option);
                     updateShieldButtonVisibility();
                 });
             });
-            
+
             // Contract address input: أحداث إضافية لضمان التحديث دائماً
             const updateFromAddressField = () => {
                 updateCostDisplay();
@@ -835,31 +864,31 @@
             try {
                 let ethereum;
                 connectedWalletType = walletType;
-                
+
                 if (walletType === 'base') {
                     if (!window.base) {
                         throw new Error('Base Wallet not found. Please install Base Wallet.');
                     }
                     ethereum = window.base;
-                    
+
                 } else if (walletType === 'metamask') {
                     if (!window.ethereum || !window.ethereum.isMetaMask) {
                         throw new Error('MetaMask not found. Please install MetaMask.');
                     }
                     ethereum = window.ethereum;
-                    
+
                 } else if (walletType === 'walletconnect') {
                     try {
                         // Show loading message
                         showInlineError('Loading WalletConnect... Please wait.');
-                        
+
                         // Lazy load WalletConnect
                         const EthereumProvider = await window.loadWalletConnect();
-                        
+
                         if (!EthereumProvider || typeof EthereumProvider.init !== 'function') {
                             throw new Error('WalletConnect provider not properly loaded');
                         }
-                        
+
                         // Resolve required WalletConnect projectId
                         let projectId = await resolveWalletConnectProjectId();
                         if (!projectId) {
@@ -869,7 +898,7 @@
                         // Clear loading message
                         const errorEl = document.getElementById('inline-error');
                         if (errorEl) errorEl.remove();
-                        
+
                         walletConnectProvider = await EthereumProvider.init({
                             projectId,
                             chains: [BASE_CHAIN_ID],
@@ -881,16 +910,16 @@
                                 icons: ['https://avatars.githubusercontent.com/u/37784886']
                             }
                         });
-                        
+
                         await walletConnectProvider.enable();
                         ethereum = walletConnectProvider;
-                        
+
                     } catch (wcError) {
                         console.error('WalletConnect connection error:', wcError);
-                        
+
                         // Provide specific error messages based on the error type
                         let errorMessage = 'WalletConnect connection failed. ';
-                        
+
                         if (wcError.message.includes('CDN sources failed')) {
                             errorMessage += 'Please check your internet connection or try Base Wallet/MetaMask instead.';
                         } else if (wcError.message.includes('User rejected')) {
@@ -902,10 +931,10 @@
                         } else {
                             errorMessage += 'Please try Base Wallet or MetaMask for a faster connection.';
                         }
-                        
+
                         throw new Error(errorMessage);
                     }
-                    
+
                 } else {
                     throw new Error('Unsupported wallet type');
                 }
@@ -913,12 +942,12 @@
                 provider = new ethers.BrowserProvider(ethereum);
                 const accounts = await provider.send('eth_requestAccounts', []);
                 signer = await provider.getSigner();
-                
+
                 console.log(`${walletType} connected:`, accounts[0]);
-                
+
                 // Update button text with connection status
                 updateConnectedButtonText(accounts[0]);
-                
+
                 // Check network
                 const network = await provider.getNetwork();
                 if (Number(network.chainId) !== BASE_CHAIN_ID) {
@@ -928,7 +957,7 @@
                     showWalletState();
                     setTimeout(() => showFormState(), 1500);
                 }
-                
+
             } catch (error) {
                 console.error('Wallet connection error:', error);
                 showInlineError(`Failed to connect ${walletType}. ${error.message}`);
@@ -938,8 +967,8 @@
         function updateConnectedButtonText(address) {
             const shortAddress = address.slice(0, 6) + '...' + address.slice(-4);
             let walletName = '';
-            
-            switch(connectedWalletType) {
+
+            switch (connectedWalletType) {
                 case 'base':
                     walletName = 'Base Wallet';
                     break;
@@ -950,7 +979,7 @@
                     walletName = 'WalletConnect';
                     break;
             }
-            
+
             elements.getProtectedBtn.innerHTML = `✅ Protected with ${walletName} (${shortAddress})`;
         }
 
@@ -984,7 +1013,7 @@
                 errorEl.parentNode.removeChild(errorEl);
                 parentEl.appendChild(errorEl);
             }
-            
+
             errorEl.textContent = message;
             setTimeout(() => {
                 if (errorEl.parentNode) {
@@ -998,14 +1027,14 @@
                 // Update button to show loading state
                 elements.switchNetworkBtn.textContent = 'Switching...';
                 elements.switchNetworkBtn.disabled = true;
-                
+
                 await provider.send('wallet_switchEthereumChain', [
                     { chainId: '0x' + BASE_CHAIN_ID.toString(16) }
                 ]);
-                
+
                 elements.networkWarning.classList.add('hidden');
                 setTimeout(() => showFormState(), 1000);
-                
+
             } catch (error) {
                 if (error.code === 4902) {
                     // Chain not added, add it
@@ -1040,12 +1069,12 @@
         function showNetworkSwitchError(message) {
             const warningEl = elements.networkWarning;
             const originalHTML = warningEl.innerHTML;
-            
+
             warningEl.innerHTML = `
                 <div style="color: #ef4444; margin-bottom: 8px;">${message}</div>
                 ${originalHTML}
             `;
-            
+
             // Reset after 5 seconds
             setTimeout(() => {
                 warningEl.innerHTML = originalHTML;
@@ -1096,7 +1125,7 @@
         }
 
         function selectCoverage(option) {
-            document.querySelectorAll('.coverage-option').forEach(opt => 
+            document.querySelectorAll('.coverage-option').forEach(opt =>
                 opt.classList.remove('selected')
             );
             option.classList.add('selected');
@@ -1121,7 +1150,7 @@
 
         async function createPolicy() {
             const target = elements.contractAddress.value.trim();
-            
+
             // Validate address format
             if (!ethers.isAddress(target)) {
                 showInlineError('Please enter a valid contract address');
@@ -1163,7 +1192,7 @@
                 // Approve USDC spending
                 const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, signer);
                 try {
-                const approveTx = await usdc.approve(POLICY_MANAGER_ADDRESS, totalWei);
+                    const approveTx = await usdc.approve(POLICY_MANAGER_ADDRESS, totalWei);
                     await approveTx.wait();
                 } catch (approveErr) {
                     console.error('USDC approve error:', approveErr);
@@ -1173,10 +1202,10 @@
                     return;
                 }
 
-                // Create policy
+                // Create policy with dynamic deadline
                 const policyManager = new ethers.Contract(POLICY_MANAGER_ADDRESS, POLICY_MANAGER_ABI, signer);
                 const deadlineTs = Math.floor(Date.now() / 1000) + DEFAULT_POLICY_DURATION_SEC;
-                let policyId = null;
+                console.log('Shielding claim until:', new Date(deadlineTs * 1000).toLocaleString());
 
                 const tx = await policyManager.createPolicy(target, deadlineTs, coverageWei);
                 const receipt = await tx.wait();
@@ -1233,11 +1262,11 @@
 
         function startCountdown() {
             if (countdownInterval) clearInterval(countdownInterval);
-            
+
             countdownInterval = setInterval(() => {
                 const now = new Date();
                 const timeLeft = protectionDeadline - now;
-                
+
                 if (timeLeft <= 0) {
                     // Protection expired
                     clearInterval(countdownInterval);
@@ -1247,18 +1276,18 @@
                     elements.verifyClaimBtn.classList.remove('hidden');
                     return;
                 }
-                
+
                 // Update progress bar
                 const totalTime = 24 * 60 * 60 * 1000; // 24 hours
                 const elapsed = totalTime - timeLeft;
                 const progress = (elapsed / totalTime) * 100;
                 elements.progressBar.style.width = `${100 - progress}%`;
-                
+
                 // Update countdown text
                 const hours = Math.floor(timeLeft / (1000 * 60 * 60));
                 const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
                 elements.countdownText.textContent = `${hours}h ${minutes}m remaining`;
-                
+
             }, 1000);
         }
 
@@ -1335,9 +1364,9 @@
             elements.walletState.classList.add('hidden');
             elements.formState.classList.add('hidden');
             elements.protectionState.classList.add('hidden');
-            
+
             // Show target state
-            switch(newState) {
+            switch (newState) {
                 case 'wallet':
                     elements.walletState.classList.remove('hidden');
                     break;
@@ -1350,7 +1379,7 @@
                 default:
                     elements.initialState.classList.remove('hidden');
             }
-            
+
             currentState = newState;
         }
 
@@ -1362,4 +1391,5 @@
         }
     </script>
 </body>
+
 </html>

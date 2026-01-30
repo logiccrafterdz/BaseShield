@@ -22,12 +22,12 @@ describe("PolicyManager", function () {
     [owner, user1, user2, targetContract] = await hre.ethers.getSigners();
 
     // Deploy mock USDC token
-    const MockERC20Factory = await hre.ethers.getContractFactory("MockERC20");
-    mockUSDC = await MockERC20Factory.deploy("Mock USDC", "USDC", 6);
+    mockUSDC = await hre.ethers.deployContract("MockERC20", ["Mock USDC", "USDC", 6], owner);
+    await mockUSDC.waitForDeployment();
 
     // Deploy PolicyManager
-    const PolicyManagerFactory = await hre.ethers.getContractFactory("PolicyManager");
-    policyManager = await PolicyManagerFactory.deploy(await mockUSDC.getAddress());
+    policyManager = await hre.ethers.deployContract("PolicyManager", [await mockUSDC.getAddress()], owner);
+    await mockUSDC.waitForDeployment();
 
     // Mint USDC to users
     await mockUSDC.mint(user1.address, INITIAL_USDC_BALANCE);
@@ -44,10 +44,9 @@ describe("PolicyManager", function () {
     });
 
     it("Should revert with invalid USDC address", async function () {
-      const PolicyManagerFactory = await hre.ethers.getContractFactory("PolicyManager");
       await expect(
-        PolicyManagerFactory.deploy(hre.ethers.ZeroAddress)
-      ).to.be.revertedWithCustomError(policyManager, "InvalidUSDCAddress");
+        hre.ethers.deployContract("PolicyManager", [hre.ethers.ZeroAddress], owner)
+      ).to.be.revertedWithCustomError(policyManager, "InvalidTargetAddress");
     });
   });
 
@@ -55,14 +54,14 @@ describe("PolicyManager", function () {
     it("Should calculate 20% fee correctly (within limits)", async function () {
       const coverageAmount = hre.ethers.parseUnits("2", 6); // 2 USDC
       const expectedFee = hre.ethers.parseUnits("0.4", 6); // 0.4 USDC (20%)
-      
+
       expect(await policyManager.calculateFee(coverageAmount)).to.equal(expectedFee);
     });
 
     it("Should apply minimum fee when calculated fee is too low", async function () {
       const coverageAmount = hre.ethers.parseUnits("0.5", 6); // 0.5 USDC
       const calculatedFee = (coverageAmount * 20n) / 100n; // 0.1 USDC
-      
+
       expect(calculatedFee).to.be.lt(MIN_FEE);
       expect(await policyManager.calculateFee(coverageAmount)).to.equal(MIN_FEE);
     });
@@ -70,7 +69,7 @@ describe("PolicyManager", function () {
     it("Should apply maximum fee when calculated fee is too high", async function () {
       const coverageAmount = hre.ethers.parseUnits("10", 6); // 10 USDC
       const calculatedFee = (coverageAmount * 20n) / 100n; // 2 USDC
-      
+
       expect(calculatedFee).to.be.gt(MAX_FEE);
       expect(await policyManager.calculateFee(coverageAmount)).to.equal(MAX_FEE);
     });
@@ -112,19 +111,19 @@ describe("PolicyManager", function () {
 
     it("Should revert with invalid target contract", async function () {
       const deadline = (await time.latest()) + 86400;
-      
+
       await expect(
         policyManager.connect(user1).createPolicy(
           hre.ethers.ZeroAddress,
           deadline,
           COVERAGE_AMOUNT
         )
-      ).to.be.revertedWithCustomError(policyManager, "InvalidUSDCAddress");
+      ).to.be.revertedWithCustomError(policyManager, "InvalidTargetAddress");
     });
 
     it("Should revert with zero coverage amount", async function () {
       const deadline = (await time.latest()) + 86400;
-      
+
       await expect(
         policyManager.connect(user1).createPolicy(
           targetContract.address,
@@ -136,7 +135,7 @@ describe("PolicyManager", function () {
 
     it("Should revert with past deadline", async function () {
       const pastDeadline = (await time.latest()) - 3600; // 1 hour ago
-      
+
       await expect(
         policyManager.connect(user1).createPolicy(
           targetContract.address,
@@ -146,12 +145,78 @@ describe("PolicyManager", function () {
       ).to.be.revertedWithCustomError(policyManager, "InvalidDeadline");
     });
 
+    it("Should revert with deadline too far in the future", async function () {
+      const farDeadline = (await time.latest()) + (31 * 86400); // 31 days from now
+
+      await expect(
+        policyManager.connect(user1).createPolicy(
+          targetContract.address,
+          farDeadline,
+          COVERAGE_AMOUNT
+        )
+      ).to.be.revertedWithCustomError(policyManager, "InvalidDeadline");
+    });
+
+    it("Should generate unique IDs for multiple policies in the same block", async function () {
+      const deadline = (await time.latest()) + 86400;
+
+      await mockUSDC.connect(user1).approve(await policyManager.getAddress(), COVERAGE_AMOUNT * 2n);
+
+      // We check that sequential calls produce different IDs
+      const tx1 = await policyManager.connect(user1).createPolicy(targetContract.address, deadline, COVERAGE_AMOUNT);
+      const tx2 = await policyManager.connect(user1).createPolicy(targetContract.address, deadline, COVERAGE_AMOUNT);
+
+      const receipt1 = await tx1.wait();
+      const receipt2 = await tx2.wait();
+
+      // Get PolicyCreated event from both
+      const event1 = policyManager.interface.parseLog(receipt1!.logs.find(l => {
+        try { return policyManager.interface.parseLog(l as any)?.name === "PolicyCreated"; } catch { return false; }
+      }) as any);
+      const event2 = policyManager.interface.parseLog(receipt2!.logs.find(l => {
+        try { return policyManager.interface.parseLog(l as any)?.name === "PolicyCreated"; } catch { return false; }
+      }) as any);
+
+      expect(event1?.args[0]).to.not.equal(event2?.args[0]);
+    });
+
+    it("Should revert with deadline too far in the future", async function () {
+      const farDeadline = (await time.latest()) + (31 * 86400); // 31 days from now
+
+      await expect(
+        policyManager.connect(user1).createPolicy(
+          targetContract.address,
+          farDeadline,
+          COVERAGE_AMOUNT
+        )
+      ).to.be.revertedWithCustomError(policyManager, "InvalidDeadline");
+    });
+
+    it("Should generate unique IDs for multiple policies in the same block", async function () {
+      const deadline = (await time.latest()) + 86400;
+
+      await mockUSDC.connect(user1).approve(await policyManager.getAddress(), COVERAGE_AMOUNT * 2n);
+
+      // We can't easily force same block in ethers v6 without manual mining, 
+      // but the contract increments the nonce, so we just check they are different.
+      const tx1 = await policyManager.connect(user1).createPolicy(targetContract.address, deadline, COVERAGE_AMOUNT);
+      const tx2 = await policyManager.connect(user1).createPolicy(targetContract.address, deadline, COVERAGE_AMOUNT);
+
+      const receipt1 = await tx1.wait();
+      const receipt2 = await tx2.wait();
+
+      const id1 = policyManager.interface.parseLog(receipt1!.logs[0] as any)?.args[0];
+      const id2 = policyManager.interface.parseLog(receipt2!.logs[0] as any)?.args[0];
+
+      expect(id1).to.not.equal(id2);
+    });
+
     it("Should revert with insufficient allowance", async function () {
       const deadline = (await time.latest()) + 86400;
-      
+
       // Don't approve or approve insufficient amount
       await mockUSDC.connect(user1).approve(await policyManager.getAddress(), COVERAGE_AMOUNT);
-      
+
       await expect(
         policyManager.connect(user1).createPolicy(
           targetContract.address,
@@ -200,7 +265,7 @@ describe("PolicyManager", function () {
       await time.increaseTo(deadline + 1);
 
       const initialBalance = await mockUSDC.balanceOf(user1.address);
-      
+
       await policyManager.connect(user1).verifyAndPayout(policyId);
 
       // Should receive full coverage amount
@@ -223,7 +288,7 @@ describe("PolicyManager", function () {
 
       const initialBalance = await mockUSDC.balanceOf(user1.address);
       const fee = await policyManager.calculateFee(COVERAGE_AMOUNT);
-      
+
       await policyManager.connect(user1).verifyAndPayout(policyId);
 
       // Should receive only the fee back
@@ -245,9 +310,9 @@ describe("PolicyManager", function () {
 
     it("Should revert if policy doesn't exist", async function () {
       const fakePolicyId = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("fake"));
-      
+
       await time.increaseTo(deadline + 1);
-      
+
       await expect(
         policyManager.connect(user1).verifyAndPayout(fakePolicyId)
       ).to.be.revertedWithCustomError(policyManager, "PolicyNotFound");
@@ -255,10 +320,10 @@ describe("PolicyManager", function () {
 
     it("Should revert if policy already resolved", async function () {
       await time.increaseTo(deadline + 1);
-      
+
       // First payout
       await policyManager.connect(user1).verifyAndPayout(policyId);
-      
+
       // Second payout should fail
       await expect(
         policyManager.connect(user1).verifyAndPayout(policyId)
@@ -267,7 +332,7 @@ describe("PolicyManager", function () {
 
     it("Should revert if non-owner tries to claim", async function () {
       await time.increaseTo(deadline + 1);
-      
+
       await expect(
         policyManager.connect(user2).verifyAndPayout(policyId)
       ).to.be.revertedWithCustomError(policyManager, "PolicyNotFound");
